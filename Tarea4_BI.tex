@@ -1,0 +1,544 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands,es-tabla]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+
+\graphicspath{{../figures/}{figures/}}
+\setlist{itemsep=2pt,topsep=4pt}
+\newcommand{\lib}{\pounds}
+
+\title{Business Intelligence -- Tarea 4\\Introducción a Series de Tiempo}
+\author{Cristina Pineda\\Facultad de Ingeniería, Universidad del Istmo de Guatemala}
+\date{25 de octubre de 2026}
+
+\begin{document}
+\maketitle
+
+\noindent Código: \texttt{Tarea4.ipynb} y \texttt{src/limpiar.py}. Todas las cifras, figuras y tablas de este documento se reproducen corriendo el notebook desde el \texttt{.xlsx} original, con las semillas documentadas en el \texttt{README.md} (\texttt{SEED\_BASE = 1234}).
+
+%==========================================================
+\section*{Parte 0: Procesos simulados}
+%==========================================================
+
+\subsection*{0.1 Derivaciones del AR(1)}
+
+Sea $Y_t = c + \phi Y_{t-1} + \varepsilon_t$ con $|\phi|<1$ y $\varepsilon_t$ independiente del pasado.
+
+\textbf{Media.} Por estacionariedad, $E[Y_t]=E[Y_{t-1}]=\mu$, así que
+\[
+\mu = c + \phi\mu \;\Rightarrow\; \mu = \frac{c}{1-\phi}.
+\]
+
+\textbf{Varianza.} Como $\varepsilon_t$ es independiente de $Y_{t-1}$ y $\operatorname{Var}(Y_t)=\operatorname{Var}(Y_{t-1})=\gamma_0$,
+\[
+\gamma_0 = \phi^2\gamma_0 + \sigma^2 \;\Rightarrow\; \gamma_0 = \frac{\sigma^2}{1-\phi^2}.
+\]
+
+\textbf{Autocorrelación.} Para $k\ge 1$, $\varepsilon_t$ es independiente de $Y_{t-k}$:
+\[
+\gamma_k = \operatorname{Cov}(c+\phi Y_{t-1}+\varepsilon_t,\;Y_{t-k}) = \phi\,\gamma_{k-1}.
+\]
+Por recursión, $\gamma_k=\phi^k\gamma_0$, de modo que $\rho_k=\gamma_k/\gamma_0=\phi^k$.
+
+\textbf{Caminata aleatoria} ($\phi=1$, $c=0$, $Y_0=0$). Se tiene $Y_t=\sum_{i=1}^{t}\varepsilon_i$ y, por independencia,
+\[
+\operatorname{Var}(Y_t)=\sum_{i=1}^{t}\sigma^2 = t\sigma^2 .
+\]
+La varianza crece con $t$, mientras que la estacionariedad débil exige que sea constante: la caminata aleatoria no es estacionaria. Además, $\sigma^2/(1-\phi^2)$ no existe cuando $\phi=1$.
+
+\subsection*{0.2 Simulación}
+
+Se simularon $n=300$ pasos de un AR(1) con $c=0$ y $\sigma=1$, descartando 200 pasos iniciales.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{0_2_realizaciones.png}
+\caption{Una realización de 300 pasos para cada $\phi$ (semillas \texttt{SEED\_BASE + 50 + i}).}
+\end{figure}
+
+Con $\phi=0$ la serie salta alrededor de 0 sin patrón; con $\phi=0.5$ es algo más suave; con $\phi=0.9$ aparecen rachas largas, pero la serie siempre regresa a 0. Con $\phi=1$ deambula sin regresar a ningún nivel, y arranca cerca de 25 porque el periodo descartado no borra el punto de partida.
+
+\textbf{¿Por qué el periodo descartado no afecta a $r_k$ con $\phi=1$?} La serie que queda es $Y_t = Y_{200} + \sum_{i=201}^{t}\varepsilon_i$. El valor $Y_{200}$ actúa como una constante sumada a toda la ventana, y como $r_k$ le resta $\bar y$ a cada observación, esa constante se cancela: $r_k$ es idéntico al de una caminata que empezara en 0.
+
+\begin{table}[H]
+\centering
+\caption{AR(1): 5\,000 réplicas por escenario (semillas \texttt{SEED\_BASE + i}). EE = error estándar del promedio.}
+\small
+\begin{tabular}{rrrrrrrrrr}
+\toprule
+$\phi$ & $\bar r_1$ & EE & $\bar r_5$ & EE & $\phi^5$ & Rechazo & EE & $\bar{\hat\phi}$ & EE \\
+\midrule
+0.0 & $-0.0036$ & 0.0008 & $-0.0036$ & 0.0008 & 0.0000 & 0.0508 & 0.0031 & $-0.0036$ & 0.0008\\
+0.5 & 0.4919 & 0.0007 & 0.0225 & 0.0010 & 0.0312 & 1.0000 & 0.0000 & 0.4935 & 0.0007\\
+0.9 & 0.8839 & 0.0004 & 0.5333 & 0.0014 & 0.5905 & 1.0000 & 0.0000 & 0.8872 & 0.0004\\
+1.0 & 0.9753 & 0.0002 & 0.8813 & 0.0009 & 1.0000 & 1.0000 & 0.0000 & 0.9819 & 0.0002\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La tasa de rechazo es la fracción de réplicas con $|r_1| > 1.96/\sqrt{300}$. Todos los errores estándar son $\le 0.003$, así que las diferencias que se comentan abajo no son ruido de simulación.
+
+\subsection*{0.3 Análisis}
+
+\textbf{Tasa de rechazo con $\phi=0$.} Salió 0.0508 (EE 0.0031), prácticamente el 5\,\%. Bajo ruido blanco $r_1\approx N(0,1/n)$, así que las bandas $\pm1.96/\sqrt n$ dejan fuera al 5\,\% de las réplicas por azar: es el error tipo I de la prueba. El promedio de $r_1$ ($-0.0036$) coincide con el sesgo conocido de $-1/n=-0.0033$ que aparece al restar la media muestral.
+
+\textbf{Caminata aleatoria.} El promedio de $r_5$ es 0.881, muy por debajo de $\phi^5=1$. La fórmula $\rho_k=\phi^k$ solo vale para procesos estacionarios; con $\phi=1$, $\rho_k$ ni siquiera está definida. Lo que sí se observa es la firma de la no estacionariedad: $r_1=0.975$ y $r_5=0.881$, una ACF que decae muy despacio.
+
+\textbf{Sesgo del estimado OLS.} Hay un sesgo hacia abajo, pequeño pero real, que crece con $\phi$: $-0.004$, $-0.007$, $-0.013$ y $-0.018$ para $\phi = 0, 0.5, 0.9, 1$. Aparece porque el regresor $y_{t-1}$ no es fijo (depende de los choques pasados) y porque hay que estimar la media. Para $|\phi|<1$ el sesgo es aproximadamente $-(1+3\phi)/n$ ($-0.003$, $-0.008$, $-0.012$), cercano a lo observado. El estimador es consistente, porque el sesgo es de orden $1/n$, pero con 300 observaciones se nota, sobre todo cerca de $\phi=1$. El mismo sesgo aparece en $r_5$ (0.0225 contra 0.0312 con $\phi=0.5$).
+
+\subsection*{0.4 Las dos razones para reprobar}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{0_4_procesos.png}
+\caption{Procesos sin memoria $Y_t=m_t+\varepsilon_t$: (a) tendencia lineal; (b) patrón semanal. En rojo, la media $m_t$.}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Procesos sin memoria, 5\,000 réplicas (semillas \texttt{SEED\_BASE + 0}, \texttt{+ 20}, \texttt{+ 21}).}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Proceso & $\bar r_1$ & $\bar r_5$ & $\bar r_7$ & Rechazo $r_1$ (EE) & $\bar{\hat\phi}$ \\
+\midrule
+Ruido blanco & $-0.0035$ & $-0.0052$ & $-0.0018$ & 0.0506 (0.0031) & $-0.0035$\\
+(a) Tendencia & 0.2437 & 0.2352 & 0.2291 & 0.9848 (0.0017) & 0.2450\\
+(b) Patrón semanal & $-0.0468$ & $-0.0484$ & 0.2642 & 0.1026 (0.0043) & $-0.0472$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{La tendencia reprueba sin tener memoria}: rechaza en el 98.5\,\% de las réplicas. La media muestral queda a la mitad de la tendencia, así que los días de cada extremo quedan todos del mismo lado de $\bar y$. Se puede predecir: $\operatorname{Var}(m_t)=4/12$ y $r_1\approx 0.33/1.33=0.25$. Además, $r_5$ y $r_7$ casi no bajan, la misma firma de no estacionariedad de la caminata aleatoria.
+
+\textbf{El patrón semanal pasa teniendo estructura}: solo rechaza el 10.3\,\%, porque $r_1\approx-0.047$ cae dentro de las bandas $\pm0.113$. Pero $r_7=0.264$ revela la estructura ($\operatorname{Var}(m_t)=0.375$ y $r_7\approx0.375/1.375=0.27$). La prueba de retardo 1 mira el rezago equivocado.
+
+\textbf{Conexión con RANDU.} RANDU pasaba las pruebas de uniformidad y de correlación entre consecutivos, pero sus ternas caían en 15 planos porque $x_{k+2}=6x_{k+1}-9x_k \pmod 1$. En ambos casos la estructura vive en un rezago o una combinación que la prueba no revisa: pasar una prueba solo dice que no hay estructura en lo que esa prueba mira.
+
+\subsection*{0.5 La prueba que sí ve}
+
+La implementación propia de Ljung--Box da $Q(10)=51.1642$ en una serie de prueba, idéntico a \texttt{acorr\_ljungbox} de \texttt{statsmodels}.
+
+\begin{table}[H]
+\centering
+\caption{Tasa de rechazo al 5\,\% (mismas réplicas que 0.4).}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Proceso & Retardo 1 & Ljung--Box $m=6$ (EE) & Ljung--Box $m=10$ (EE)\\
+\midrule
+Ruido blanco & 0.0506 & 0.0512 (0.0031) & 0.0534 (0.0032)\\
+(a) Tendencia & 0.9848 & 1.0000 (0.0000) & 1.0000 (0.0000)\\
+(b) Patrón semanal & 0.1026 & 0.2062 (0.0057) & 0.9552 (0.0029)\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Con ruido blanco, Ljung--Box mantiene el error tipo I cerca del 5\,\% aun mirando muchos rezagos a la vez, que es justo el problema que resuelve un portmanteau. Con la tendencia rechaza siempre, igual que la prueba de retardo 1. La diferencia está en el patrón semanal: con $m=10$ rechaza el 95.5\,\%, porque la suma incluye $r_7\approx0.26$; con $m=\log n\approx6$ solo el 20.6\,\%, porque el rezago 7 queda fuera. Lección: la regla $m\approx\log n$ puede quedarse corta con estacionalidad, y por eso FPP2 recomienda $m=2s$. Con datos diarios y ciclo semanal, $m$ debe ser al menos 7, y mejor 14.
+
+%==========================================================
+\section*{Parte 1: Limpieza}
+%==========================================================
+
+\subsection*{1.1 Carga y conteos}
+
+Hay 541\,909 filas, 25\,900 facturas, 4\,070 productos (\texttt{StockCode}) y 4\,372 clientes. Hay 135\,080 filas sin \texttt{CustomerID} (24.9\,\%).
+
+\texttt{InvoiceNo}, \texttt{StockCode} y \texttt{CustomerID} se leen como texto porque son identificadores, no cantidades. \texttt{InvoiceNo} tiene 3\,839 valores con letra (\texttt{C536379} es una cancelación); \texttt{StockCode} tiene 1\,124 códigos con letras (\texttt{85123A}, \texttt{POST}), y leído como número mezclaría enteros con texto, de modo que \texttt{85123} y \texttt{"85123"} se tratarían como productos distintos; \texttt{CustomerID} tiene vacíos, y como un entero no guarda \texttt{NaN}, pandas lo convertiría a decimal (\texttt{17850.0}).
+
+\subsection*{1.2 Casos de limpieza}
+
+\begin{enumerate}[label=(\alph*)]
+\item \textbf{Duplicados exactos: se eliminan.} Son 5\,268 líneas (\lib21\,741) idénticas en todo, hasta el segundo. Una factura ya junta las unidades en \texttt{Quantity}; repetir la línea es un error de captura.
+\item \textbf{Facturas que no empiezan con dígito.} Las \texttt{C} (cancelaciones) \textbf{se quedan}: la venta es neta y las cancelaciones restan el día en que ocurren. Las \texttt{A} \textbf{se eliminan}: son 3 líneas de \emph{Adjust bad debt} (\lib11\,062 cada una), ajustes contables, no ventas.
+\item \textbf{StockCodes que no son productos.} Se eliminan los envíos (\texttt{POST}, \texttt{DOT}, \texttt{C2}), ajustes manuales (\texttt{M}, \texttt{m}), descuentos (\texttt{D}), muestras (\texttt{S}), cargos y comisiones (\texttt{BANK CHARGES}, \texttt{AMAZONFEE}, \texttt{CRUK}), deuda incobrable (\texttt{B}) y vales de regalo (\texttt{gift\_0001\_*}, un pago anticipado). Se quedan los códigos \texttt{DCGS\dots} y \texttt{PADS}, que son productos reales.
+\item \textbf{Precios $\le 0$: se eliminan.} Son 2\,517 líneas; solo 2 negativas (las facturas \texttt{A}). Las de precio 0 no suman venta, pero el 98.4\,\% no tiene cliente y sus descripciones (\emph{check}, \emph{damaged}, \emph{found}) son anotaciones de inventario. Quitarlas importa para el RFM: una factura solo con líneas a precio 0 contaría como compra.
+\item \textbf{Cantidades negativas sin factura \texttt{C}: se eliminan.} Son 1\,336 líneas, todas con precio 0 (subconjunto de (d)): bajas de inventario (\emph{damaged}, \emph{thrown away}, \emph{wet pallet}), no devoluciones de clientes.
+\item \textbf{Sin \texttt{CustomerID}: se quedan para la serie, se excluyen en la Parte 6.} Son el 14.9\,\% del monto (\lib1.45 millones). Para la serie, la pregunta es si hubo venta, y la hubo; quitarlas subestimaría la venta diaria cerca de 15\,\%. Para el RFM no se pueden asignar a ningún cliente.
+\end{enumerate}
+
+\subsection*{1.3 Bitácora de limpieza}
+
+\begin{table}[H]
+\centering
+\caption{Reglas en el orden de aplicación; cada una cuenta solo las filas que sobrevivieron a las anteriores.}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Regla & Filas elim. & Monto elim. (\lib) & Filas rest. & Monto rest. (\lib)\\
+\midrule
+0. Datos originales & 0 & 0.00 & 541\,909 & 9\,747\,747.93\\
+1. Duplicados exactos & 5\,268 & 21\,740.98 & 536\,641 & 9\,726\,006.95\\
+2. Prefijo distinto de C (A) & 3 & $-11\,062.06$ & 536\,638 & 9\,737\,069.01\\
+3. Ventas anuladas por ajuste \texttt{M} & 28 & 52\,460.75 & 536\,610 & 9\,684\,608.26\\
+4. StockCodes que no son productos & 2\,913 & $-47\,712.79$ & 533\,697 & 9\,732\,321.05\\
+5. Precio $\le 0$ & 2\,493 & 0.00 & 531\,204 & 9\,732\,321.05\\
+6. Cantidad negativa sin C & 0 & 0.00 & 531\,204 & 9\,732\,321.05\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+En total se eliminan 10\,705 líneas (2.0\,\%) y el monto neto baja \lib15\,427. La regla 3 salió del inciso 1.4: cuando la tienda anula una venta equivocada con un ajuste manual \texttt{M} en lugar de una cancelación del mismo producto, eliminar solo la \texttt{M} deja viva la venta equivocada. La regla busca, para cada \texttt{M}, una venta del mismo cliente, el mismo día, anterior y con el monto opuesto, y debe ir antes de la regla 4. De sus 28 líneas, 24 eran cargos que la regla 4 habría quitado igual (por eso esa regla baja de 2\,937 a 2\,913) y 4 son productos por unas \lib39\,000. La regla 4 tiene un neto pequeño que esconde montos grandes que se cancelan (envíos a favor; comisiones de Amazon y ajustes \texttt{M} en contra). La regla 5 suma \lib0 porque todo era precio 0, y la 6 no elimina nada porque la 5 ya quitó esas líneas; se deja como protección.
+
+\subsection*{1.4 Las seis líneas más grandes}
+
+Son tres errores, cada uno con su corrección:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{llp{8.2cm}r}
+\toprule
+Cliente & Fecha & Qué pasó & Monto\\
+\midrule
+16446 & 9 dic 2011 & 80\,995 \emph{Paper Craft, Little Birdie} (581483), cancelados 12 minutos después (C581484) & $\pm$\lib168\,470\\
+12346 & 18 ene 2011 & 74\,215 \emph{Medium Ceramic Top Storage Jar} (541431), cancelados 16 minutos después (C541433) & $\pm$\lib77\,184\\
+15098 & 10 jun 2011 & 60 paquetes de 60 canastas (556444), anulados 3 minutos después con un ajuste \texttt{M} (C556445); luego se facturó 1 paquete & $\pm$\lib38\,970\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Son cantidades absurdas corregidas en minutos: errores de captura. \textbf{La limpieza no resuelve los casos 1 y 2}, porque son un producto real y una cancelación legítima. \textbf{El caso 3 sí, pero solo después de corregirla}: la primera versión eliminaba la \texttt{M} y dejaba la venta, y el 10 de junio subía de \lib22\,541 a \lib60\,907; con la regla 3 queda en \lib21\,937. \textbf{El neteo diario resuelve los tres}, porque cada error y su corrección ocurrieron el mismo día; los tres días quedan cerca de la mediana diaria (\lib27\,770). Si la corrección hubiera caído otro día, quedarían un pico y un hueco falsos. Para el RFM, el cliente 12346 queda con una compra y $M=0$.
+
+\subsection*{1.5 Función \texttt{limpiar}}
+
+\texttt{src/limpiar.py} contiene \texttt{limpiar(df)}, que aplica las seis reglas en orden, y \texttt{bitacora\_limpieza(df)}, que produce la tabla de 1.3. Ambas recorren la misma lista \texttt{REGLAS}, así que el orden y la bitácora no pueden desincronizarse. \texttt{limpiar(df\_raw)} reproduce exactamente las 531\,204 filas (\lib9\,732\,321.05) de la exploración.
+
+%==========================================================
+\section*{Parte 2: El calendario}
+%==========================================================
+
+\subsection*{2.1 Serie diaria}
+
+Del 1 de diciembre de 2010 al 9 de diciembre de 2011 hay 374 días calendario; 305 con transacciones y 69 sin ellas.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{2_1_serie_diaria.png}
+\caption{Venta neta diaria con los datos limpios.}
+\end{figure}
+
+La venta ronda \lib20\,000--30\,000 diarias en la primera mitad del año y sube con claridad desde septiembre, superando con frecuencia \lib60\,000 en octubre y noviembre (pedidos para Navidad). Se ven el hueco de fin de año y la variación dentro de cada semana.
+
+\subsection*{2.2 Días sin transacciones}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{llr}
+\toprule
+Tipo & Días & Cantidad\\
+\midrule
+Sábados & todos & 53\\
+Cierre de Navidad & 24, 26--31 dic 2010; 2--3 ene 2011 & 9\\
+Semana Santa & 22, 24 y 25 abr 2011 & 3\\
+Boda real & 29 abr 2011 & 1\\
+\emph{Bank holidays} de lunes & 2 may, 30 may, 29 ago 2011 & 3\\
+\midrule
+Total & & 69\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{La tienda no abre los sábados}, pero sí los domingos, salvo dentro de los cierres de Navidad y Semana Santa. En Navidad, el 27 y 28 de diciembre y el 3 de enero fueron \emph{bank holidays} sustitutos, porque el 25, el 26 y el 1 cayeron en fin de semana. \textbf{El feriado que no se repite} es el 29 de abril de 2011 (boda real). \textbf{Los móviles} más difíciles son los de Semana Santa, cuya fecha depende del calendario lunar. Los \emph{bank holidays} de lunes cambian de fecha pero con regla fija (primer o último lunes), y los sustitutos de Navidad dependen del día de la semana del 25 de diciembre.
+
+\subsection*{2.3 ¿Cero o faltante?}
+
+\textbf{Cero} cuando se suman ventas (total del mes, flujo de caja) o en la media móvil de 3.1, que promedia una ventana fija del calendario: un día cerrado no vendió nada. \textbf{Faltante} cuando se modela o pronostica la venta de un día abierto: tratar los sábados como cero bajaría la media, crearía un patrón artificial cada 7 días y evaluaría pronósticos en días cuya respuesta se sabe de antemano.
+
+\subsection*{2.4 El último día}
+
+El 9 de diciembre está incompleto: la última transacción es a las 12:50 (la mediana de los otros viernes es 17:24), tiene 48 facturas contra una mediana de 68 y su venta (\lib29\,530) es poco más de la mitad de la mediana de los últimos ocho viernes (\lib50\,614). \textbf{Se descarta}; dejarlo simularía una caída al final de la serie.
+
+\textbf{Serie de trabajo:} del 1 de diciembre de 2010 al 8 de diciembre de 2011, 373 días y 304 abiertos. Entrenamiento hasta el 30 de septiembre (245 días abiertos); prueba del 3 de octubre al 8 de diciembre (58 días abiertos); el domingo 2 de octubre es historia, pero no se evalúa.
+
+%==========================================================
+\section*{Parte 3: Tendencia, estacionalidad y autocorrelación}
+%==========================================================
+
+\subsection*{3.1 Tendencia}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{3_1_tendencia.png}
+\caption{Venta diaria y media móvil centrada de 7 días (días cerrados = 0). La línea punteada marca el inicio de la prueba.}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{3_1_ventanas.png}
+\caption{Media móvil centrada con ventanas de 5, 7 y 30 días.}
+\end{figure}
+
+\textbf{Tendencia.} Diciembre de 2010 empieza alto (\lib40\,000) y cae a casi cero en el cierre de fin de año. De enero a agosto es casi plana (\lib18\,000--25\,000), con hundimientos en las semanas con feriados. Desde septiembre sube hasta \lib50\,000--55\,000 en noviembre, más del doble del nivel de mitad de año.
+
+\textbf{¿Por qué 7?} Toda ventana de 7 días seguidos contiene exactamente un día de cada tipo, así que el patrón semanal se cancela. Con 5 días la ventana a veces incluye el sábado y a veces no, y la línea zigzaguea al ritmo de la semana. Con 30 días se aplanan los cambios de nivel, se pierden 15 días en cada extremo y, como 30 no es múltiplo de 7, unos días de la semana pesan más. \textbf{¿Por qué centrada?} Para que el valor en $t$ represente el nivel alrededor de $t$; una media hacia atrás llegaría con 3 días de retraso. El costo es que necesita datos del futuro (relevante en 5.4). Los hundimientos en feriados son un efecto de contar los días cerrados como cero.
+
+\subsection*{3.2 Estacionalidad}
+
+\begin{table}[H]
+\centering
+\caption{Índice estacional (promedio de $y_t/MA_t$) por día de la semana, entrenamiento. La media móvil se calculó solo con datos hasta el 30 de septiembre.}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Día & Índice & Mediana & Días\\
+\midrule
+Lunes & 1.171 & 1.170 & 37\\
+Martes & 1.548 & 1.460 & 42\\
+Miércoles & 1.227 & 1.134 & 41\\
+Jueves & 1.565 & 1.456 & 41\\
+Viernes & 1.110 & 1.130 & 38\\
+Domingo & 0.577 & 0.530 & 40\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.65\textwidth]{3_2_indices.png}
+\caption{Índices estacionales; la línea roja marca $7/6$.}
+\end{figure}
+
+Martes y jueves venden alrededor de 55\,\% sobre el nivel semanal; el domingo, poco más de la mitad. Encaja con una clientela mayorista que hace pedidos entre semana. \textbf{El promedio de los seis índices no es 1} (es 1.20) porque la media móvil promedia siete días incluyendo el sábado en cero: $MA=$ venta semanal$/7$, mientras que el día abierto promedio vende venta semanal$/6$, así que el cociente promedio es $7/6\approx1.167$. Las semanas con feriados tienen más ceros, lo que baja la media móvil y sube un poco más los cocientes.
+
+\subsection*{3.3 Autocorrelación}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{3_3_acf.png}
+\caption{ACF de la venta, días abiertos del entrenamiento ($n=245$, bandas $\pm0.125$); en rojo, múltiplos de 6.}
+\end{figure}
+
+\textbf{(a)} Se salen 6 de 21 rezagos (1, 3, 5, 6, 12, 18). Reprueba la prueba de retardo 1 ($r_1=0.212$). El pico está en el rezago 6 ($r_6=0.414$), que equivale a 7 días calendario porque no hay sábados: es el mismo día de la semana anterior (la equivalencia se rompe en semanas con feriados). Ljung--Box: $Q(6)=71.6$ y $Q(12)=97.6$, con valores-p del orden de $10^{-13}$ y $10^{-15}$.
+
+\textbf{(b)} Hay señales de las dos fuentes sin memoria de la Parte 0: el pico en el rezago estacional se parece al proceso (b) de 0.4, y los rezagos cortos todos positivos se parecen a la tendencia del proceso (a). Que los picos estacionales decaigan (0.41, 0.28, 0.20) sugiere además algo que se mueve en el tiempo. Con esta ACF no se pueden separar; eso lo hace la Parte 4.
+
+%==========================================================
+\section*{Parte 4: Del AR(1) al SARIMA}
+%==========================================================
+
+\subsection*{4.1 Quitar el día de la semana}
+
+Los coeficientes de la regresión contra seis indicadoras (sin intercepto) son las ventas medias de cada día: lunes \lib27\,212, martes \lib35\,168, miércoles \lib27\,836, jueves \lib35\,425, viernes \lib26\,258 y domingo \lib13\,717.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{4_1_acf_residuos.png}
+\caption{Arriba: ACF de los residuos $e_t$ (azul) y de la venta original (gris). Abajo: residuos en el tiempo.}
+\end{figure}
+
+Los picos estacionales desaparecen ($r_{12}$ pasa de 0.28 a 0.08), pero ahora los rezagos 1 a 6 quedan todos entre 0.21 y 0.30, y Ljung--Box incluso sube ($Q(6)=97.0$, $Q(12)=112.5$). La ACF \textbf{no decae como $\phi^k$}: con $\phi\approx0.28$, $r_2$ sería 0.08 y $r_3$ 0.02. Es plana y positiva, como el proceso con tendencia. Los residuos en el tiempo lo confirman: altos en diciembre, muy bajos en Navidad, algo negativos a mitad de año y altos de nuevo en septiembre. \textbf{Al modelo le falta el nivel}, que cambia a lo largo del año.
+
+\subsection*{4.2 Un AR(1) sobre los residuos}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{4_2_acf_ar1.png}
+\caption{ACF de los residuos del AR(1), $u_t$ (azul), y de $e_t$ (gris).}
+\end{figure}
+
+$\hat c=-100.9$ y $\hat\phi=0.285$. El AR(1) elimina el rezago 1 ($r_1=-0.06$), pero quedan fuera los rezagos 4, 6 y 9, con $Q(6)=24.3$ (5 gl, $p=1.9\times10^{-4}$) y $Q(12)=33.2$ (11 gl, $p=4.8\times10^{-4}$): \textbf{no es ruido blanco}. Con $\hat\phi=0.285$ un choque se olvida en dos o tres días, mientras que el nivel se mantiene alto o bajo durante meses; un AR(1) estacionario siempre vuelve a la misma media. Además persiste el rezago 6, señal de una estacionalidad que crece con el nivel (multiplicativa). Todo apunta a diferenciar, modelar la estacionalidad y usar logaritmos.
+
+\subsection*{4.3 SARIMA}
+
+\begin{table}[H]
+\centering
+\caption{Ajustes sobre $\log y_t$ (245 días abiertos).}
+\small
+\begin{tabular}{llcrrl}
+\toprule
+Modelo & maxiter & ¿Convergió? & Iter. & log-L & Parámetros\\
+\midrule
+S1 & 50 & No & 50 & $-188.40$ & $c=0.809$, $\phi=0.086$, $\Phi=0.913$, $\sigma^2=0.246$\\
+S1 & 500 & Sí & 80 & $-162.47$ & $c=4.271$, $\phi=0.128$, $\Phi=0.517$, $\sigma^2=0.219$\\
+S2 & 50 & Sí & 14 & $-157.45$ & $\theta=-0.909$, $\Theta=-0.684$, $\sigma^2=0.214$\\
+S2 & 500 & Sí & 14 & $-157.45$ & idénticos\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Con el límite por defecto, S1 no converge, y sus parámetros no son el ajuste: al subir a 500 iteraciones la log-verosimilitud mejora 26 puntos y $\Phi$ pasa de 0.913 (casi raíz unitaria) a 0.517. Ambas versiones implican una media de largo plazo parecida (unas \lib25\,000 diarias), pero con dinámicas muy distintas. De aquí en adelante, S1 usa \texttt{maxiter = 500}. En S2, $\theta=-0.91$ casi cancela la diferencia $(1-B)$: el nivel se mueve, pero despacio, como un suavizamiento exponencial con peso cercano al 9\,\%.
+
+\textbf{$s=6$ y no 7} porque el modelo trabaja sobre filas de días abiertos, y una semana son 6 filas. \textbf{Se rompe} en las semanas con feriados: 6 filas atrás ya no es el mismo día de la semana (por ejemplo, después del Lunes de Pascua). \textbf{El logaritmo} porque la estacionalidad es multiplicativa y la variabilidad crece con el nivel; en logaritmo los efectos son proporcionales y la varianza se estabiliza. La venta mínima de un día abierto es \lib3\,440, así que el logaritmo siempre existe.
+
+\subsection*{4.4 Diagnóstico}
+
+\begin{table}[H]
+\centering
+\caption{Ljung--Box sobre los residuos ($m-2$ gl; S2 sin sus primeros 7 residuos).}
+\small
+\begin{tabular}{lrlrrrr}
+\toprule
+Modelo & $n$ & Rezagos fuera & $Q(6)$ & $p$ (4 gl) & $Q(12)$ & $p$ (10 gl)\\
+\midrule
+S1 & 245 & 6, 12 & 9.62 & 0.047 & 24.70 & 0.006\\
+S2 & 238 & ninguno & 3.60 & 0.462 & 9.27 & 0.507\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{4_4_acf_sarima.png}
+\caption{ACF de los residuos de S1 y S2; en rojo, rezagos fuera de las bandas.}
+\end{figure}
+
+\textbf{S2 deja residuos de ruido blanco}; S1 no. A S1 le quedan los rezagos estacionales 6 y 12: su AR estacional estacionario supone que el efecto de la semana anterior se olvida, cuando el patrón semanal es persistente, y además supone un nivel fijo. Las dos diferencias de S2 resuelven ambas cosas. $Q(6)$ apenas rechaza para S1, mientras que $Q(12)=Q(2s)$ es concluyente, igual que en 0.5.
+
+\subsection*{4.5 ¿Hacia dónde van los pronósticos?}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{4_5_horizonte.png}
+\caption{Pronóstico a 120 días abiertos desde el 30 de septiembre, en libras, con IC de 95\,\%.}
+\end{figure}
+
+\textbf{S1 es estacionario}: como un AR(1) con $|\phi|<1$, el efecto de lo último observado se apaga y el pronóstico converge a su media de unas \lib25\,000; el intervalo deja de crecer. \textbf{S2 no es estacionario}: como la caminata aleatoria, no tiene media a la cual volver. Con dos diferencias arrastra el último nivel, el último patrón semanal y la última pendiente, así que proyecta para siempre la subida de septiembre (una recta en logaritmo, un crecimiento exponencial en libras), y su intervalo crece sin límite. A horizonte largo ninguno es creíble, pero en la Parte 5 el horizonte es de a lo mucho 6 días abiertos.
+
+%==========================================================
+\section*{Parte 5: Pronóstico y fuga}
+%==========================================================
+
+\subsection*{5.1 Modelos}
+
+B1: media histórica de los días abiertos. B2: naive estacional. M1: OLS con tendencia lineal (en días calendario) e indicadoras de día de la semana. M2: OLS con indicadoras y los rezagos $y_{t-7}$, $y_{t-14}$ (si caen en un día cerrado, se usa el mismo día de la semana abierto más reciente; para el 9 de mayo, $y_{t-7}$ es el 18 de abril, verificado en el código). S1 (\texttt{maxiter = 500}) y S2 en logaritmo, con horizonte igual a la posición del objetivo entre los días abiertos posteriores al origen.
+
+\textbf{M2 puede usar $y_{t-7}$} para cualquier objetivo $t=o+h$ con $h\le7$, porque $t-7\le o$ ya está observado; \textbf{no puede usar $y_{t-1}$}, que solo se conoce para el lunes. \textbf{S1 usa el rezago 1 recursivamente}: para el martes sustituye el lunes no observado por su propio pronóstico, de modo que ese efecto se diluye con el horizonte.
+
+\textbf{Convergencia.} S2 convergió en los 32 orígenes. S1 convergió en 31; en el del 24 de julio de 2011, \texttt{lbfgs} se detuvo en la iteración 71 sin declarar convergencia (aun con un límite de 2\,000). Se reajustó con el método de Powell, que sí converge y llega al mismo punto (log-L $-124.66$ contra $-124.67$; pronósticos que difieren en menos de \lib100).
+
+\subsection*{5.2 Tres formas de estimar el error}
+
+\begin{table}[H]
+\centering
+\caption{MAE y RMSE (\lib), con todos los días pronosticados juntos. (a) validación cruzada aleatoria de 5 folds, media $\pm$ d.e. sobre 10 semillas (\texttt{SEED\_BASE + 200 + j}); (b) origen móvil en el entrenamiento (22 orígenes, 128 días); (c) prueba (10 orígenes, 58 días).}
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Modelo & (a) MAE & (a) RMSE & (b) MAE & (b) RMSE & (c) MAE & (c) RMSE\\
+\midrule
+B1 & 10\,271 $\pm$ 50 & 14\,236 $\pm$ 41 & 10\,228 & 14\,884 & 22\,404 & 26\,928\\
+B2 & --- & --- & 11\,262 & 15\,569 & 14\,147 & 18\,374\\
+M1 & 9\,151 $\pm$ 123 & 12\,560 $\pm$ 206 & 9\,761 & 13\,822 & 15\,177 & 20\,149\\
+M2 & 8\,335 $\pm$ 81 & 11\,769 $\pm$ 107 & 9\,223 & 13\,358 & 15\,231 & 19\,814\\
+S1 & --- & --- & 9\,720 & 13\,738 & 16\,703 & 20\,935\\
+S2 & --- & --- & 10\,031 & 13\,960 & \textbf{12\,355} & \textbf{15\,696}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{(a) no tiene sentido para B2, S1 y S2} porque están definidos por el orden del tiempo: con datos barajados, ``lo más reciente'' puede ser futuro, y la serie deja de ser una secuencia continua; sería interpolar, no pronosticar. \textbf{(b) se acerca un poco más a (c)} que (a), porque no usa el futuro. \textbf{Ninguna se acerca de verdad}: ambas subestiman el error de prueba en 35--55\,\% y tampoco aciertan el orden de los modelos (dentro del entrenamiento gana M2; en la prueba, S2).
+
+\subsection*{5.3 ¿Qué modelo gana?}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{5_3_pronosticos_prueba.png}
+\caption{Pronósticos con origen móvil en la prueba; las líneas verticales son los domingos de origen.}
+\end{figure}
+
+\textbf{Gana S2.} El error medio con signo (real $-$ pronóstico) lo explica: B1 $+20\,434$, B2 $+2\,736$, M1 $+13\,697$, M2 $+12\,934$, S1 $+14\,237$ y S2 $+1\,248$. En la temporada alta el nivel se duplicó. Los modelos que regresan a una media (B1, S1), que tienen una tendencia estimada con un año plano (M1) o que dependen de rezagos con coeficientes menores que 1 (M2) se quedan cortos todos los días. B2 y S2 no son estacionarios y parten del último nivel observado, así que casi no tienen sesgo. S2 le gana a B2 porque estima el nivel suavizando varias semanas en lugar de copiar un solo día y sus picos. Es consistente con 4.4: S2 era el único modelo con residuos de ruido blanco.
+
+\subsection*{5.4 La trampa}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Modelo & (a) MAE & (a) RMSE & (b) MAE & (b) RMSE\\
+\midrule
+M2 & 8\,335 $\pm$ 81 & 11\,769 $\pm$ 107 & 9\,223 & 13\,358\\
+M2 + MA7 centrada & 7\,414 $\pm$ 104 & 10\,013 $\pm$ 125 & 8\,242 & 11\,267\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Se ve mejor} (11\,\% menos MAE en ambas validaciones), pero el predictor es \textbf{ilegal}:
+\[
+MA_t=\tfrac17\left(y_{t-3}+\dots+y_t+\dots+y_{t+3}\right)
+\]
+contiene la propia respuesta y tres días del futuro. \textbf{El origen móvil no lo detecta} porque controla qué filas se usan para ajustar y cuáles se pronostican, pero no qué hay dentro de cada columna: si la media móvil se calculó una vez sobre toda la serie, la columna ya trae el futuro incorporado. \textbf{(c) no se puede calcular sin trampa}: desde el domingo 2 de octubre, $MA_t$ del 9 de octubre requiere ventas hasta el 12 de octubre. Cualquier versión legal (una media hacia atrás, o un pronóstico de la media móvil) ya es otro predictor.
+
+\subsection*{5.5 ¿Por qué el error de prueba es mayor?}
+
+\textbf{Causa 1: cómo se partieron los datos.} La validación cruzada aleatoria interpola con vecinos de ambos lados y estima con el futuro (la diferencia entre (a) y (b)). \textbf{Se arregla} con el origen móvil.
+
+\textbf{Causa 2: la serie cambió.} La prueba es la temporada alta: el nivel se duplica, lo que deja cortos a los modelos con media fija, y como la estacionalidad es multiplicativa, el mismo error porcentual vale más libras. El entrenamiento evaluado en (b) no contiene una temporada comparable (la diferencia entre (b) y (c)). \textbf{No se arregla} con ninguna validación.
+
+\textbf{Con un solo año no se puede estimar la estacionalidad anual}: hay una sola observación de cada mes, y no se distingue ``noviembre siempre es alto'' de ``las ventas crecen'' o de ``este noviembre fue especial''. Se necesitarían al menos dos años.
+
+%==========================================================
+\section*{Parte 6: Análisis RFM}
+%==========================================================
+
+\subsection*{6.1 R, F y M}
+
+Con los datos limpios con \texttt{CustomerID} y solo transacciones antes del 1 de octubre de 2011: R = días desde la última factura de venta; F = facturas de venta distintas; M = venta neta (con cancelaciones). Hay \textbf{3\,613 clientes} (mediana: F = 2, M = \lib576, R = 65 días). Se excluyen 35 clientes con solo cancelaciones (no tienen compra a partir de la cual medir R). \textbf{7 clientes tienen $M\le0$}: tres negativos (devolvieron compras anteriores a los datos) y cuatro con todo cancelado (entre ellos el 12346 de 1.4). \textbf{Se quedan}: sí compraron y tienen R y F; su puntaje bajo en M describe bien su historia. \textbf{No se usa nada posterior al 1 de octubre} porque la variable a predecir en 6.3 es la compra entre el 1 de octubre y el 8 de diciembre: con datos de ese periodo, la recencia de quien compró en octubre ``predeciría'' la compra de manera perfecta. Es la misma fuga que en 5.4.
+
+\subsection*{6.2 Puntajes por quintiles}
+
+El 40.2\,\% de los clientes tiene F = 1, así que los cortes del 20\,\% y 40\,\% coinciden y \texttt{pd.qcut} falla por cortes repetidos. Se desempató al azar como indica el enunciado (orden por \texttt{CustomerID}, permutación con \texttt{default\_rng(2026)}, \texttt{qcut} sobre \texttt{rank(method='first')}), aplicando el mismo procedimiento a R, F y M. Cada puntaje queda con 722 o 723 clientes. F = 1 cae en los puntajes 1, 2 y 3; F = 3 en 3 y 4; F = 5 en 4 y 5. \textbf{Dos clientes con la misma F en puntajes distintos se comportaron igual}: los separó el azar. El puntaje agrega ruido y una regla basada en él (como los campeones) depende de la semilla.
+
+\subsection*{6.3 ¿Qué dimensión separa mejor?}
+
+El 50.8\,\% de los clientes volvió a comprar entre el 1 de octubre y el 8 de diciembre.
+
+\begin{table}[H]
+\centering
+\caption{Fracción que compró por puntaje.}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+& 1 & 2 & 3 & 4 & 5\\
+\midrule
+R & 27.8\,\% & 38.1\,\% & 55.6\,\% & 66.3\,\% & 66.1\,\%\\
+F & 32.4\,\% & 31.3\,\% & 45.8\,\% & 59.0\,\% & 85.5\,\%\\
+M & 29.5\,\% & 37.3\,\% & 45.8\,\% & 60.7\,\% & 80.8\,\%\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{6_3_tasas.png}
+\caption{Tasa de compra por puntaje.}
+\end{figure}
+
+\textbf{F separa mejor} (de 32\,\% a 86\,\%), seguida de M. R se estanca arriba: en temporada alta da igual haber comprado hace dos semanas o dos meses. Los puntajes 1 y 2 de F tienen la misma tasa porque todos esos clientes tienen F = 1. \textbf{AUC} (Mann--Whitney): R (signo invertido) 0.673, F 0.720, M 0.709 y la suma de los tres puntajes 0.734. La suma es la mejor, pero mejora poco sobre F: las tres dimensiones comparten mucha información, y el AUC es moderado en todos los casos.
+
+\subsection*{6.4 Los campeones}
+
+Los clientes con puntaje 4 o 5 en las tres dimensiones son \textbf{778 (21.5\,\%)} y generaron \textbf{\lib1\,272\,645, el 53.1\,\%} de la venta neta del 1 de octubre al 8 de diciembre de todos los clientes con \texttt{CustomerID} (\lib2\,396\,670), incluidos los nuevos. Es la regla de Pareto. El 81.4\,\% de ellos volvió a comprar (contra 50.8\,\% del total), pero el 18.6\,\% no lo hizo.
+
+\subsection*{6.5 Clientes nuevos}
+
+De los 2\,595 clientes con actividad entre el 1 de octubre y el 8 de diciembre, \textbf{723 (27.9\,\%) son nuevos} y generaron \textbf{\lib378\,213, el 15.8\,\%} de la venta neta (los campeones, 53.1\,\%; otros clientes previos, 31.1\,\%). \textbf{Ningún modelo cliente por cliente puede pronosticar esa venta}: un cliente nuevo no tiene R, F ni M, y al 1 de octubre no existe en la tabla. A eso se suma el 14.9\,\% del monto sin \texttt{CustomerID} (1.2(f)).
+
+La Parte 5 es un pronóstico \textbf{top-down} (el total); un modelo cliente por cliente es \textbf{bottom-up} (cada cliente, y se suma). \textbf{Solo el top-down ve a los clientes nuevos}, porque la serie agregada ya incluye la venta de quienes llegan cada semana, y un modelo como S2, que sigue el nivel reciente, proyecta ese ritmo. Para que la comparación del proyecto sea justa, el bottom-up necesita un componente para clientes que todavía no existen y para la venta sin cliente; si no, tendrá un sesgo hacia abajo ajeno a la calidad de sus modelos individuales. A cambio, el top-down no sabe quién compra.
+
+%==========================================================
+\section*{Uso de herramientas de IA}
+%==========================================================
+
+Se usó Claude (Anthropic) como apoyo para estructurar el código y redactar borradores de las explicaciones. La autora ejecutó el código, revisó los resultados y tomó y ajustó las decisiones de análisis; por ejemplo, la regla de ventas anuladas por ajustes \texttt{M} surgió al revisar los resultados del inciso 1.4, y el reajuste con Powell en la Parte 5 al revisar la convergencia en cada origen.
+
+\begin{thebibliography}{9}
+\bibitem{chen15} D.~Chen. \emph{Online Retail} [conjunto de datos]. UCI Machine Learning Repository, 2015.
+\bibitem{chen12} D.~Chen, S.~L.~Sain y K.~Guo. Data mining for the online retail industry: A case study of RFM model-based customer segmentation using data mining. \emph{Journal of Database Marketing \& Customer Strategy Management}, 19(3):197--208, 2012.
+\bibitem{fpp2} R.~J.~Hyndman y G.~Athanasopoulos. \emph{Forecasting: Principles and Practice}, 2a ed. OTexts, 2018.
+\bibitem{tsay} R.~S.~Tsay. \emph{Analysis of Financial Time Series}, 2a ed. Wiley, 2005.
+\end{thebibliography}
+
+\end{document}
